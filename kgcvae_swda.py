@@ -88,13 +88,13 @@ def main():
 
         ckpt = get_checkpoint_state(ckp_dir)
         print("Created models with fresh parameters.")
-        #model.apply(lambda m: [torch.nn.init.uniform_(p.data, -1.0 * config.init_w, config.init_w) for p in m.parameters()])
+        model.apply(lambda m: [torch.nn.init.uniform_(p.data, -1.0 * config.init_w, config.init_w) for p in m.parameters()])
 
         # Load word2vec weight
         if api.word2vec is not None and not FLAGS.forward_only:
             print("Loaded word2vec")
             model.embedding.weight.data.copy_(torch.from_numpy(np.array(api.word2vec)))
-        model.embedding.weight.data[0].fill_(0)
+        #model.embedding.weight.data[0].fill_(0)
 
         model.prepare_mul_ref()
 
@@ -128,9 +128,9 @@ def main():
                 model.eval()
                 valid_loss = model.valid_model("ELBO_VALID", valid_feed)
 
-                test_feed.epoch_init(test_config.batch_size, test_config.backward_size,
-                                     test_config.step_size, shuffle=True, intra_shuffle=False)
-                model.valid_model("ELBO_VALID", test_feed)
+                test_feed.epoch_init(valid_config.batch_size, valid_config.backward_size,
+                                     valid_config.step_size, shuffle=True, intra_shuffle=False)
+                model.valid_model("ELBO_TEST", test_feed)
                 model.train()
 
                 done_epoch = epoch + 1
@@ -172,11 +172,10 @@ def main():
                                   valid_config.step_size, shuffle=False, intra_shuffle=False)
             model.valid_model("ELBO_TEST", test_feed)
 
-            dest_f = open(os.path.join(log_dir, "test.txt"), "wb")
+            dest_f = open(os.path.join('./', "test.txt"), "wb")
             test_feed.epoch_init(test_config.batch_size, test_config.backward_size,
                                  test_config.step_size, shuffle=False, intra_shuffle=False)
-            model.test_model(test_feed, num_batch=None, repeat=10, dest=dest_f)
-            model.train()
+            model.test_mul_ref(test_feed, num_batch=None, repeat=5, dest=dest_f)
             dest_f.close()
 
 if __name__ == "__main__":

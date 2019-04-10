@@ -24,7 +24,7 @@ import tensorboardX as tb
 import tensorboardX.summary
 import tensorboardX.writer
 
-import logger
+from . import logger
 
 class BaseTFModel(nn.Module):
     global_t = tf.placeholder(dtype=tf.int32, name="global_t")
@@ -122,6 +122,7 @@ class KgRnnCVAE(BaseTFModel):
         self.word_vec_path = api.word_vec_path
         self.vocab = api.vocab
         self.rev_vocab = api.rev_vocab
+        self.rev_da_vocab = api.rev_dialog_act_vocab
         self.vocab_size = len(self.vocab)
         self.topic_vocab = api.topic_vocab
         self.topic_vocab_size = len(self.topic_vocab)
@@ -279,8 +280,8 @@ class KgRnnCVAE(BaseTFModel):
             # print((self.input_contexts.view(-1, self.max_utt_len) > 0)[:10])
             # print((torch.max(torch.abs(input_embedding), 2)[0] > 0)[:10])
             #print(self.embedding.weight.data[1:2])
-            assert ((self.input_contexts.view(-1, self.max_utt_len) > 0).float() - (torch.max(torch.abs(input_embedding), 2)[0] > 0).float()).abs().sum().item() == 0,\
-                str(((self.input_contexts.view(-1, self.max_utt_len) > 0).float() - (torch.max(torch.abs(input_embedding), 2)[0] > 0).float()).abs().sum().item())
+            #assert ((self.input_contexts.view(-1, self.max_utt_len) > 0).float() - (torch.max(torch.abs(input_embedding), 2)[0] > 0).float()).abs().sum().item() == 0,\
+                #str(((self.input_contexts.view(-1, self.max_utt_len) > 0).float() - (torch.max(torch.abs(input_embedding), 2)[0] > 0).float()).abs().sum().item())
 
             if self.sent_type == "bow":
                 input_embedding, sent_size = get_bow(input_embedding)
@@ -351,7 +352,7 @@ class KgRnnCVAE(BaseTFModel):
             prior_mulogvar = self.priorNet_mulogvar(cond_embedding)
             prior_mu, prior_logvar = torch.chunk(prior_mulogvar, 2, 1)
             prior_mu = self.prior_bn(prior_mu)
-            prior_logvar = prior_logvar.new().resize_as_(prior_logvar.data).zero_()
+            #prior_logvar = prior_logvar.new().resize_as_(prior_logvar.data).zero_()
             # use sampled Z or posterior Z
             if self.use_prior:
                 latent_sample = sample_gaussian(prior_mu, prior_logvar)
@@ -401,7 +402,7 @@ class KgRnnCVAE(BaseTFModel):
                                                                     end_of_sequence_id=self.eos_id,
                                                                     maximum_length=self.max_utt_len,
                                                                     num_decoder_symbols=self.vocab_size,
-                                                                    context_vector=selected_attribute_embedding,
+                                                                    context_vector=selected_attribute_embedding if self.use_hcf else None,
                                                                     decode_type='greedy')
                 # print(final_context_state)
             else:
@@ -420,7 +421,7 @@ class KgRnnCVAE(BaseTFModel):
                 dec_input_embedding = F.dropout(dec_input_embedding, 1 - self.keep_prob, self.training)
 
                 dec_outs, _, final_context_state =  decoder_fn_lib.train_loop(self.dec_cell, self.dec_cell_proj, dec_input_embedding, 
-                    init_state=dec_init_state, context_vector=selected_attribute_embedding, sequence_length=dec_seq_lens)
+                    init_state=dec_init_state, context_vector=selected_attribute_embedding if self.use_hcf else None, sequence_length=dec_seq_lens)
 
             # dec_outs, _, final_context_state = dynamic_rnn_decoder(dec_cell, loop_func, inputs=dec_input_embedding, sequence_length=dec_seq_lens)
             if final_context_state is not None:
@@ -501,6 +502,30 @@ class KgRnnCVAE(BaseTFModel):
             feed_dict["global_t"] = global_t
 
         feed_dict = {k: torch.from_numpy(v).cuda() if isinstance(v, np.ndarray) else v for k, v in feed_dict.items()}
+
+        return feed_dict
+
+    def batch_2_feed2(self, batch, global_t, use_prior, repeat=1):
+        context, context_lens, floors, topics, my_profiles, ot_profiles, outputs, output_lens, output_das = batch
+        feed_dict = {"input_contexts": context, "context_lens":context_lens,
+                     "floors": floors, "topics":topics, "my_profile": my_profiles,
+                     "ot_profile": ot_profiles, "output_tokens": outputs,
+                     "output_das": output_das, "output_lens": output_lens,
+                     "use_prior": use_prior}
+        if repeat > 1:
+            tiled_feed_dict = {}
+            for key, val in feed_dict.items():
+                if key == "use_prior":
+                    tiled_feed_dict[key] = val
+                    continue
+                multipliers = [1]*len(val.shape)
+                multipliers[0] = repeat
+                tiled_feed_dict[key] = np.tile(val, multipliers)
+            feed_dict = tiled_feed_dict
+
+        if global_t is not None:
+            feed_dict["global_t"] = global_t
+
 
         return feed_dict
 
@@ -741,10 +766,11 @@ class KgRnnCVAE(BaseTFModel):
                 if batch[1][0] == 1:
                     local_t += 1
                     continue
-                feed_dict = self.batch_2_feed(batch, None, use_prior=True, repeat=repeat)
+                feed_dict = self.batch_2_feed2(batch, None, use_prior=True, repeat=repeat)
+                torch_feed_dict = self.batch_2_feed(batch, None, use_prior=True, repeat=repeat)
                 #if self.beam_width == 0:
                 with torch.no_grad():
-                    self.forward(feed_dict, mode='test')
+                    self.forward(torch_feed_dict, mode='test')
                 word_outs, da_logits = self.dec_out_words.cpu().numpy(), self.da_logits.cpu().numpy()
                 # else:
                 #     word_outs, word_lens, da_logits = sess.run([self.dec_out_words, self.dec_out_lens,self.da_logits], feed_dict)
@@ -753,14 +779,12 @@ class KgRnnCVAE(BaseTFModel):
                 # if self.beam_width != 0:
                 #     sample_words = [ws[0:,:l] for ws,l in zip(sample_words, word_lens)]
 
-                true_floor = feed_dict[self.floors]
-                true_srcs = feed_dict[self.input_contexts]
-                true_src_lens = feed_dict[self.context_lens]
-                true_topics = feed_dict[self.topics]
-                
+                true_floor = feed_dict['floors']
+                true_srcs = feed_dict['input_contexts']
+                true_src_lens = feed_dict['context_lens']
+                true_topics = feed_dict['topics']
                 true_outs = self.mul_ref_outs[local_t]
                 true_das = self.mul_ref_das[local_t]
-
                 local_t += 1
 
                 if dest != sys.stdout:
