@@ -119,6 +119,7 @@ class KgRnnCVAE(BaseTFModel):
 
     def __init__(self, config, api, log_dir, scope=None):
         super(KgRnnCVAE, self).__init__()
+        self.word_vec_path = api.word_vec_path
         self.vocab = api.vocab
         self.rev_vocab = api.rev_vocab
         self.vocab_size = len(self.vocab)
@@ -656,4 +657,196 @@ class KgRnnCVAE(BaseTFModel):
         dest.write(report + "\n")
         print("Done testing")
 
+    def prepare_mul_ref(self, dir='./data/test_multi_ref.json'):
+            import json
+            import nltk
 
+            with open('./data/test_multi_ref.json') as f:
+                mul_raws = json.load(f)
+
+            self.mul_ref_outs = []
+            self.mul_ref_das = []
+            for raw in mul_raws:
+                raw_outs = raw['responses']
+                raw_das = raw['resp_dialog_acts']
+
+                out_tokens = [["<s>"] + nltk.WordPunctTokenizer().tokenize(raw_out.lower()) + ["</s>"] for raw_out in raw_outs]
+                out_ids = [[self.rev_vocab.get(t, self.rev_vocab["<unk>"]) for t in line] for line in out_tokens]
+                tmp_outs = []
+                for out_id in out_ids:
+                    if len(out_id) >= 40:
+                        tmp_outs.append(np.array(out_id[0:39] + [out_id[-1]]))
+                    else:
+                        tmp_outs.append(np.array(out_id))
+                tmp_das = [self.rev_da_vocab[raw_da] for raw_da in raw_das]
+                
+                assert(len(tmp_das) == len(tmp_outs))
+                self.mul_ref_outs.append(tmp_outs)
+                self.mul_ref_das.append(tmp_das)
+
+
+    def test_mul_ref(self, test_feed, num_batch=None, repeat=5, dest=sys.stdout):
+            from nltk.translate.bleu_score import sentence_bleu
+            from nltk.translate.bleu_score import SmoothingFunction
+
+            with open(self.word_vec_path, "rb") as f:
+                lines = f.readlines()
+            raw_word2vec = {}
+            for l in lines:
+                w, vec = l.split(" ", 1)
+                raw_word2vec[w] = vec
+
+            def _eval_embed(ref, sample):
+                mean_embs, extre_embs, res = [], [], []
+                for emb_seq in [ref, sample]:
+                    # mean sentence embedding
+                    mean_embs.append(np.mean(emb_seq, axis=0))
+                    # extrema sentence embedding
+                    s_max = np.max(emb_seq, axis=0)
+                    s_min = np.min(emb_seq, axis=0)
+                    s_plus = np.absolute(s_min) <= s_max
+                    extre_embs.append(s_max*s_plus + s_min*np.logical_not(s_plus))
+                for embs in [mean_embs, extre_embs]:
+                    cos_sim = np.sum(embs[0]*embs[1])/np.sqrt(np.sum(embs[0]*embs[0])*np.sum(embs[1]*embs[1]))
+                    res.append((cos_sim+1.)/2)
+                return res
+
+            local_t = 0
+            bleu_prec = [[] for i in range(1, 5)]
+            bleu_recall = [[] for i in range(1, 5)]
+            embed_prec = [[] for i in range(2)]
+            embed_recall = [[] for i in range(2)]
+
+            def _bleus(ref, sample):
+                res = []
+                for weight in [[1, 0, 0, 0],
+                            [1, 0, 0, 0],
+                            [1./2., 1./2., 0, 0],
+                            [1./3., 1./3., 1./3., 0],
+                            [1./4., 1./4., 1./4., 1./4.]]:
+                    try:
+                        res.append(sentence_bleu(
+                            [ref],
+                            sample,
+                            smoothing_function=SmoothingFunction().method7,
+                            weights=weight))
+                    except:
+                        res.append(0.0)
+                return res
+
+            while True:
+                batch = test_feed.next_batch()
+                if batch is None or (num_batch is not None and local_t > num_batch):
+                    break
+                if batch[1][0] == 1:
+                    local_t += 1
+                    continue
+                feed_dict = self.batch_2_feed(batch, None, use_prior=True, repeat=repeat)
+                #if self.beam_width == 0:
+                with torch.no_grad():
+                    self.forward(feed_dict, mode='test')
+                word_outs, da_logits = self.dec_out_words.cpu().numpy(), self.da_logits.cpu().numpy()
+                # else:
+                #     word_outs, word_lens, da_logits = sess.run([self.dec_out_words, self.dec_out_lens,self.da_logits], feed_dict)
+                sample_words = np.split(word_outs, repeat, axis=0)
+                sample_das = np.split(da_logits, repeat, axis=0)
+                # if self.beam_width != 0:
+                #     sample_words = [ws[0:,:l] for ws,l in zip(sample_words, word_lens)]
+
+                true_floor = feed_dict[self.floors]
+                true_srcs = feed_dict[self.input_contexts]
+                true_src_lens = feed_dict[self.context_lens]
+                true_topics = feed_dict[self.topics]
+                
+                true_outs = self.mul_ref_outs[local_t]
+                true_das = self.mul_ref_das[local_t]
+
+                local_t += 1
+
+                if dest != sys.stdout:
+                    if local_t % (test_feed.num_batch / 10) == 0:
+                        logger.info("%.2f >> " % (test_feed.ptr / float(test_feed.num_batch))),
+
+                    # print the dialog context
+                dest.write("Batch %d of topic %s\n" % (local_t, self.topic_vocab[true_topics[0]]))
+                start = np.maximum(0, true_src_lens[0]-5)
+                for t_id in range(start, true_srcs.shape[1], 1):
+                    src_str = " ".join([self.vocab[e] for e in true_srcs[0, t_id].tolist() if e != 0])
+                    dest.write("Src %d-%d: %s\n" % (t_id, true_floor[0, t_id], src_str))
+                # print the true outputs
+                true_tokens = [[self.vocab[e] for e in true_out.tolist() if e not in [0, self.eos_id, self.go_id]] for true_out in true_outs]
+                true_strs = [" ".join(true_token).replace(" ' ", "'") for true_token in true_tokens]
+                da_strs = [self.da_vocab[true_da] for true_da in true_das]
+                # print the predicted outputs
+                for ref_id, (true_str,da_str) in enumerate(zip(true_strs, da_strs)):
+                    dest.write("Target %d (%s) >> %s\n" % (ref_id, da_str, true_str))
+
+                local_tokens = []
+                for r_id in range(repeat):
+                    pred_outs = sample_words[r_id]
+                    pred_da = np.argmax(sample_das[r_id], axis=1)[0]
+                    pred_tokens = [self.vocab[e] for e in pred_outs[0].tolist() if e != self.eos_id and e != 0]
+                    pred_str = " ".join(pred_tokens).replace(" ' ", "'")
+                    dest.write("Sample %d (%s) >> %s\n" % (r_id, self.da_vocab[pred_da], pred_str))
+                    local_tokens.append(pred_tokens)
+
+
+                bleu_scores = [
+                    [_bleus(ref, sample) for ref in true_tokens]
+                    for sample in local_tokens
+                ]
+                bleu_scores = np.transpose(np.array(bleu_scores), (2, 0, 1))
+
+                for i in range(1, 5):
+                    bleu_i = bleu_scores[i]
+                    bleu_i_precision = bleu_i.max(axis=1).mean()
+                    bleu_i_recall = bleu_i.max(axis=0).mean()
+
+                    bleu_prec[i-1].append(bleu_i_precision)
+                    bleu_recall[i-1].append(bleu_i_recall)
+
+
+                true_embs = [np.array([np.fromstring(raw_word2vec[w], sep=" ")
+                        for w in sent if w in raw_word2vec]) for sent in true_tokens]
+                local_embs = [np.array([np.fromstring(raw_word2vec[w], sep=" ")
+                        for w in sent if w in raw_word2vec]) for sent in local_tokens]
+
+                embed_scores = [
+                    [_eval_embed(ref, sample) for ref in true_embs if ref.size != 0]
+                    for sample in local_embs if sample.size != 0
+                ]
+                embed_scores = np.transpose(np.array(embed_scores), (2, 0, 1))
+
+                for i in range(2):
+                    embed_i = embed_scores[i]
+                    embed_i_precision = embed_i.max(axis=1).mean()
+                    embed_i_recall = embed_i.max(axis=0).mean()
+
+                    embed_prec[i].append(embed_i_precision)
+                    embed_recall[i].append(embed_i_recall)
+
+                # make a new line for better readability
+                dest.write("\n")
+
+
+            bleu_prec = [np.mean(x) for x in bleu_prec]
+            bleu_recall = [np.mean(x) for x in bleu_recall]
+            bleu_f1 = [2*(prec*rec)/(prec+rec+10e-12) for prec,rec in zip(bleu_prec, bleu_recall)]
+
+            for i in range(1, 5):
+                report = ' -- bleu-{} prec={}, recall={}, f1={}'.format(
+                    i, bleu_prec[i-1], bleu_recall[i-1], bleu_f1[i-1])
+                logger.info(report)
+                dest.write(report + "\n")
+
+            embed_prec = [np.mean(x) for x in embed_prec]
+            embed_recall = [np.mean(x) for x in embed_recall]
+            embed_f1 = [2*(prec*rec)/(prec+rec+10e-12) for prec,rec in zip(embed_prec, embed_recall)]
+
+            type = ['mean', 'extrema']
+            for i in range(2):
+                report = ' -- embed-{} prec={}, recall={}, f1={}'.format(
+                    type[i], embed_prec[i], embed_recall[i], embed_f1[i])
+                logger.info(report)
+                dest.write(report + "\n")
+            logger.info("Done testing")

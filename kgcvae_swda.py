@@ -17,7 +17,7 @@ import torch
 import glob
 
 # constants
-tf.app.flags.DEFINE_string("word2vec_path", None, "The path to word2vec. Can be None.")
+tf.app.flags.DEFINE_string("word2vec_path", "./glove_twitter_27B_200d.txt", "The path to word2vec. Can be None.")
 tf.app.flags.DEFINE_string("data_dir", "data/full_swda_clean_42da_sentiment_dialog_corpus.p", "Raw data directory.")
 tf.app.flags.DEFINE_string("work_dir", "working", "Experiment results directory.")
 tf.app.flags.DEFINE_bool("equal_batch", True, "Make each batch has similar length.")
@@ -96,6 +96,8 @@ def main():
             model.embedding.weight.data.copy_(torch.from_numpy(np.array(api.word2vec)))
         model.embedding.weight.data[0].fill_(0)
 
+        model.prepare_mul_ref()
+
         if ckpt:
             print("Reading dm models parameters from %s" % ckpt)
             model.load_state_dict(torch.load(ckpt))
@@ -153,6 +155,11 @@ def main():
                     break
             print("Best validation loss %f" % best_dev_loss)
             print("Done training")
+            model.eval()
+            dest_f = open(os.path.join('./', "test.txt"), "wb")
+            test_feed.epoch_init(test_config.batch_size, test_config.backward_size,
+                                 test_config.step_size, shuffle=False, intra_shuffle=False)
+            model.test_mul_ref(test_feed, num_batch=None, repeat=5, dest=dest_f)
         else:
             # begin validation
             # begin validation
