@@ -724,7 +724,7 @@ class KgRnnCVAE(BaseTFModel):
                 self.mul_ref_das.append(tmp_das)
 
 
-    def test_mul_ref(self, test_feed, num_batch=None, repeat=5, dest=sys.stdout):
+    def test_mul_ref(self, test_feed, test_raw_feed, num_batch=None, repeat=5, dest=sys.stdout):
             from nltk.translate.bleu_score import sentence_bleu
             from nltk.translate.bleu_score import SmoothingFunction
 
@@ -775,12 +775,14 @@ class KgRnnCVAE(BaseTFModel):
 
             while True:
                 batch = test_feed.next_batch()
+                raw_batch = test_raw_feed.next_batch()
                 if batch is None or (num_batch is not None and local_t > num_batch):
                     break
                 if batch[1][0] == 1:
                     local_t += 1
                     continue
                 feed_dict = self.batch_2_feed2(batch, None, use_prior=True, repeat=repeat)
+                raw_feed_dict = self.batch_2_feed2(raw_batch, None, use_prior=True, repeat=repeat)
                 torch_feed_dict = self.batch_2_feed(batch, None, use_prior=True, repeat=repeat)
                 #if self.beam_width == 0:
                 with torch.no_grad():
@@ -794,8 +796,8 @@ class KgRnnCVAE(BaseTFModel):
                 #     sample_words = [ws[0:,:l] for ws,l in zip(sample_words, word_lens)]
 
                 true_floor = feed_dict['floors']
-                true_srcs = feed_dict['input_contexts']
-                true_src_lens = feed_dict['context_lens']
+                true_srcs = raw_feed_dict['input_contexts']
+                true_src_lens = raw_feed_dict['context_lens']
                 true_topics = feed_dict['topics']
                 true_outs = self.mul_ref_outs[local_t]
                 true_das = self.mul_ref_das[local_t]

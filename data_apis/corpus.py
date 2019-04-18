@@ -67,6 +67,7 @@ class SWDADialogCorpus(object):
         for tokens in self.train_corpus[self.utt_id]:
             all_words.extend(tokens)
         vocab_count = Counter(all_words).most_common()
+        raw_vocab_count = vocab_count
         raw_vocab_size = len(vocab_count)
         discard_wc = np.sum([c for t, c, in vocab_count[max_vocab_cnt:]])
         vocab_count = vocab_count[0:max_vocab_cnt]
@@ -78,7 +79,9 @@ class SWDADialogCorpus(object):
                  raw_vocab_size, len(vocab_count), vocab_count[-1][1], float(discard_wc) / len(all_words)))
 
         self.vocab = ["<pad>", "<unk>"] + [t for t, cnt in vocab_count]
+        self.raw_vocab = ["<pad>"] + [t for t, cnt in raw_vocab_count]
         self.rev_vocab = {t: idx for idx, t in enumerate(self.vocab)}
+        self.rev_raw_vocab = {t: idx for idx, t in enumerate(self.raw_vocab)}
         self.unk_id = self.rev_vocab["<unk>"]
         print("<d> index %d" % self.rev_vocab["<d>"])
         print("<sil> index %d" % self.rev_vocab.get("<sil>", -1))
@@ -132,6 +135,27 @@ class SWDADialogCorpus(object):
         id_train = _to_id_corpus(self.train_corpus[self.utt_id])
         id_valid = _to_id_corpus(self.valid_corpus[self.utt_id])
         id_test = _to_id_corpus(self.test_corpus[self.utt_id])
+        return {'train': id_train, 'valid': id_valid, 'test': id_test}
+
+
+    def get_raw_dialog_corpus(self):
+        def _to_id_corpus(data):
+            results = []
+            for dialog in data:
+                temp = []
+                # convert utterance and feature into numeric numbers
+                for utt, floor, feat in dialog:
+                    if feat is not None:
+                        id_feat = list(feat)
+                        id_feat[self.dialog_act_id] = self.rev_dialog_act_vocab[feat[self.dialog_act_id]]
+                    else:
+                        id_feat = None
+                    temp.append(([self.rev_raw_vocab.get(t, 0) for t in utt], floor, id_feat))
+                results.append(temp)
+            return results
+        id_train = _to_id_corpus(self.train_corpus[self.dialog_id])
+        id_valid = _to_id_corpus(self.valid_corpus[self.dialog_id])
+        id_test = _to_id_corpus(self.test_corpus[self.dialog_id])
         return {'train': id_train, 'valid': id_valid, 'test': id_test}
 
     def get_dialog_corpus(self):

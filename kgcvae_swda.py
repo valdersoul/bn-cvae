@@ -55,15 +55,19 @@ def main():
     # get data set
     api = SWDADialogCorpus(FLAGS.data_dir, word2vec=FLAGS.word2vec_path, word2vec_dim=config.embed_size)
     dial_corpus = api.get_dialog_corpus()
+    raw_dial_corpus = api.get_raw_dialog_corpus()
+
     meta_corpus = api.get_meta_corpus()
 
     train_meta, valid_meta, test_meta = meta_corpus.get("train"), meta_corpus.get("valid"), meta_corpus.get("test")
     train_dial, valid_dial, test_dial = dial_corpus.get("train"), dial_corpus.get("valid"), dial_corpus.get("test")
+    test_raw_dial = raw_dial_corpus.get("test")
 
     # convert to numeric input outputs that fits into TF models
     train_feed = SWDADataLoader("Train", train_dial, train_meta, config)
     valid_feed = SWDADataLoader("Valid", valid_dial, valid_meta, config)
     test_feed = SWDADataLoader("Test", test_dial, test_meta, config)
+    test_raw_feed = SWDADataLoader("Test", test_raw_dial, test_meta, config)
 
     if FLAGS.forward_only or FLAGS.resume:
         log_dir = os.path.join(FLAGS.work_dir, FLAGS.test_path)
@@ -174,6 +178,8 @@ def main():
 
             dest_f = open(os.path.join('./', "test.txt"), "wb")
             test_feed.epoch_init(test_config.batch_size, test_config.backward_size,
+                                 test_config.step_size, shuffle=False, intra_shuffle=False)
+            test_raw_feed.epoch_init(test_config.batch_size, test_config.backward_size,
                                  test_config.step_size, shuffle=False, intra_shuffle=False)
             model.test_mul_ref(test_feed, num_batch=None, repeat=5, dest=dest_f)
             dest_f.close()
