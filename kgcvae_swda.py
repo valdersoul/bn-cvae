@@ -88,7 +88,7 @@ def main():
 
         ckpt = get_checkpoint_state(ckp_dir)
         print("Created models with fresh parameters.")
-        model.apply(lambda m: [torch.nn.init.uniform_(p.data, -1.0 * config.init_w, config.init_w) for p in m.parameters()])
+        #model.apply(lambda m: [torch.nn.init.uniform_(p.data, -1.0 * config.init_w, config.init_w) for p in m.parameters()])
 
         # Load word2vec weight
         if api.word2vec is not None and not FLAGS.forward_only:
@@ -155,11 +155,11 @@ def main():
                     break
             print("Best validation loss %f" % best_dev_loss)
             print("Done training")
-            model.eval()
-            dest_f = open(os.path.join('./', "test.txt"), "wb")
-            test_feed.epoch_init(test_config.batch_size, test_config.backward_size,
-                                 test_config.step_size, shuffle=False, intra_shuffle=False)
-            model.test_mul_ref(test_feed, num_batch=None, repeat=5, dest=dest_f)
+            #model.eval()
+            #dest_f = open(os.path.join('./', "test.txt"), "wb")
+            #test_feed.epoch_init(test_config.batch_size, test_config.backward_size,
+            #                     test_config.step_size, shuffle=False, intra_shuffle=False)
+            #model.test_mul_ref(test_feed, num_batch=None, repeat=5, dest=dest_f)
         else:
             # begin validation
             # begin validation

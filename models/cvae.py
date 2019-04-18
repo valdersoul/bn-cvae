@@ -150,9 +150,14 @@ class KgRnnCVAE(BaseTFModel):
         self.prior_bn = nn.BatchNorm1d(config.latent_size)
         self.recog_bn.weight.requires_grad = False
         self.prior_bn.weight.requires_grad = False
-
-        self.recog_bn.weight.fill_(1.0)
-        self.prior_bn.weight.fill_(0.8)
+        self.prior_logvar_bn = nn.BatchNorm1d(config.latent_size)
+        self.recog_logvar_bn = nn.BatchNorm1d(config.latent_size)
+        self.prior_logvar_bn.weight.requires_grad = False
+        self.recog_logvar_bn.weight.requires_grad = False
+        self.recog_bn.weight.fill_(0.4)
+        self.prior_bn.weight.fill_(1.0)
+        self.prior_logvar_bn.weight.fill_(1.0)
+        self.recog_logvar_bn.weight.fill_(0.5)
         # topicEmbedding
         self.t_embedding = nn.Embedding(self.topic_vocab_size, config.topic_embed_size)
         if self.use_hcf:
@@ -346,12 +351,18 @@ class KgRnnCVAE(BaseTFModel):
             self.recog_mulogvar = recog_mulogvar = self.recogNet_mulogvar(recog_input)
             recog_mu, recog_logvar = torch.chunk(recog_mulogvar, 2, 1)
             recog_mu = self.recog_bn(recog_mu)
+            #recog_logvar = self.recog_logvar_bn(recog_logvar)
+            #recog_logvar = recog_logvar.new().resize_as_(recog_logvar.data).zero_()
         
         with variable_scope.variable_scope("priorNetwork"):
             # P(XYZ)=P(Z|X)P(X)P(Y|X,Z)
             prior_mulogvar = self.priorNet_mulogvar(cond_embedding)
             prior_mu, prior_logvar = torch.chunk(prior_mulogvar, 2, 1)
-            prior_mu = self.prior_bn(prior_mu)
+            fake_prior_mu = prior_mu.new().resize_as_(prior_mu.data).zero_()
+            fake_prior_logvar = prior_logvar.new().resize_as_(prior_logvar.data).zero_()
+            #prior_mu = prior_mu.new().resize_as_(prior_mu.data).zero_()
+            #prior_mu = self.prior_bn(prior_mu)
+            #prior_logvar = self.prior_logvar_bn(prior_logvar)
             #prior_logvar = prior_logvar.new().resize_as_(prior_logvar.data).zero_()
             # use sampled Z or posterior Z
             if self.use_prior:
@@ -459,7 +470,10 @@ class KgRnnCVAE(BaseTFModel):
 
                 # print(recog_mu.sum(), recog_logvar.sum(), prior_mu.sum(), prior_logvar.sum())
                 kld = gaussian_kld(recog_mu, recog_logvar, prior_mu, prior_logvar)
+                fake_kld = gaussian_kld(prior_mu, prior_logvar, fake_prior_mu, fake_prior_logvar)
                 self.avg_kld = torch.mean(kld)
+                self.fake_kld = torch.mean(fake_kld)
+                self.avg_bow_loss = self.fake_kld
                 if mode == 'train':
                     kl_weights = 1.0 #min(self.global_t / self.full_kl_step, 1.0)
                 else:
@@ -467,14 +481,14 @@ class KgRnnCVAE(BaseTFModel):
 
                 self.kl_w = kl_weights
                 self.elbo = self.avg_rc_loss + kl_weights * self.avg_kld
-                self.aug_elbo = self.avg_da_loss + self.elbo #+ self.avg_bow_loss
+                self.aug_elbo = self.avg_da_loss + self.elbo + self.fake_kld
 
                 self.summary_op = [\
                     tb.summary.scalar("model/loss/da_loss", self.avg_da_loss.item()),
                     tb.summary.scalar("model/loss/rc_loss", self.avg_rc_loss.item()),
                     tb.summary.scalar("model/loss/elbo", self.elbo.item()),
                     tb.summary.scalar("model/loss/kld", self.avg_kld.item()),
-                    tb.summary.scalar("model/loss/bow_loss", self.avg_bow_loss.item())]
+                    tb.summary.scalar("model/loss/bow_loss", self.fake_kld.item())]
 
                 self.log_p_z = norm_log_liklihood(latent_sample, prior_mu, prior_logvar)
                 self.log_q_z_xy = norm_log_liklihood(latent_sample, recog_mu, recog_logvar)
