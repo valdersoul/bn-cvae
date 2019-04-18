@@ -121,6 +121,7 @@ class KgRnnCVAE(BaseTFModel):
         super(KgRnnCVAE, self).__init__()
         self.word_vec_path = api.word_vec_path
         self.vocab = api.vocab
+        self.raw_vocab = api.raw_vocab
         self.rev_vocab = api.rev_vocab
         self.rev_da_vocab = api.rev_dialog_act_vocab
         self.vocab_size = len(self.vocab)
@@ -811,7 +812,7 @@ class KgRnnCVAE(BaseTFModel):
                 dest.write("Batch %d of topic %s\n" % (local_t, self.topic_vocab[true_topics[0]]))
                 start = np.maximum(0, true_src_lens[0]-5)
                 for t_id in range(start, true_srcs.shape[1], 1):
-                    src_str = " ".join([self.vocab[e] for e in true_srcs[0, t_id].tolist() if e != 0])
+                    src_str = " ".join([self.raw_vocab[e] for e in true_srcs[0, t_id].tolist() if e != 0])
                     dest.write("Src %d-%d: %s\n" % (t_id, true_floor[0, t_id], src_str))
                 # print the true outputs
                 true_tokens = [[self.vocab[e] for e in true_out.tolist() if e not in [0, self.eos_id, self.go_id]] for true_out in true_outs]
