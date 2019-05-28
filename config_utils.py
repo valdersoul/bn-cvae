@@ -40,7 +40,7 @@ class KgCVAEConfig(object):
     lr_decay = 0.6  # only used by SGD
     keep_prob = 1.0  # drop out rate
     improve_threshold = 0.996  # for early stopping
-    patient_increase = 2.0  # for early stopping
+    patient_increase = 5.0  # for early stopping
     early_stop = True
     max_epoch = 60  # max number of epoch of training
     grad_noise = 0.0  # inject gradient noise?

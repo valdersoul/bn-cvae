@@ -351,7 +351,7 @@ class KgRnnCVAE(BaseTFModel):
                 recog_input = torch.cat([cond_embedding, output_embedding], 1)
             self.recog_mulogvar = recog_mulogvar = self.recogNet_mulogvar(recog_input)
             recog_mu, recog_logvar = torch.chunk(recog_mulogvar, 2, 1)
-            recog_mu = self.recog_bn(recog_mu)
+            #recog_mu = self.recog_bn(recog_mu)
             #recog_logvar = self.recog_logvar_bn(recog_logvar)
             #recog_logvar = recog_logvar.new().resize_as_(recog_logvar.data).zero_()
         
@@ -672,6 +672,7 @@ class KgRnnCVAE(BaseTFModel):
                 true_str = " ".join(true_tokens).replace(" ' ", "'")
                 da_str = self.da_vocab[true_das[b_id]]
                 # print the predicted outputs
+                print(true_str)
                 dest.write("Target (%s) >> %s\n" % (da_str, true_str))
                 local_tokens = []
                 for r_id in range(repeat):
@@ -833,7 +834,7 @@ class KgRnnCVAE(BaseTFModel):
 
 
                 bleu_scores = [
-                    [_bleus(ref, sample) for ref in true_tokens]
+                    [_bleus(ref, sample) for ref in [true_tokens[0]]]
                     for sample in local_tokens
                 ]
                 bleu_scores = np.transpose(np.array(bleu_scores), (2, 0, 1))

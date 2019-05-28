@@ -181,7 +181,7 @@ def main():
                                  test_config.step_size, shuffle=False, intra_shuffle=False)
             test_raw_feed.epoch_init(test_config.batch_size, test_config.backward_size,
                                  test_config.step_size, shuffle=False, intra_shuffle=False)
-            model.test_mul_ref(test_feed, num_batch=None, repeat=5, dest=dest_f)
+            model.test_model(test_feed, num_batch=None, repeat=5, dest=dest_f)
             dest_f.close()
 
 if __name__ == "__main__":
